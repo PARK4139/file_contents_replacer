@@ -1,0 +1,44 @@
+[
+  {
+    "순번": 1,
+    "레이블": "RULE-TEST",
+    "word": "Test",
+    "replace": "Testing"
+  },
+  {
+    "순번": 2,
+    "레이블": "RULE-TEST-CASE",
+    "word": "Test_Case",
+    "replace": "Test Case"
+  },
+  {
+    "순번": 3,
+    "레이블": "RULE-INTEG-TEST-PLAN",
+    "word": "통합_테스트_계획서",
+    "replace": "통합 검증 계획서"
+  },
+  {
+    "순번": 4,
+    "레이블": "RULE-TEST-PLAN",
+    "word": "Test Plan",
+    "replace": "Test Planning"
+  },
+  {
+    "순번": 5,
+    "레이블": "RULE-CLINICAL-TRIAL-PLAN",
+    "word": "Clinical_Trial_Execution_Plan",
+    "replace": "임상 시험 수행 계획"
+  },
+  {
+    "순번": 6,
+    "레이블": "RULE-PLAN",
+    "word": "Plan",
+    "replace": "Planning"
+  },
+  {
+    "순번": 7,
+    "레이블": "RULE-SQA-SYS",
+    "word": "SQA_운용_체계_가이드라인",
+    "replace": "SQA 운용 가이드"
+  }
+]

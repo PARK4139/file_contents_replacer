@@ -1,0 +1,8 @@
+순번,레이블,word,replace
+1,RULE-TEST,Test,Testing
+2,RULE-TEST-CASE,Test_Case,Test Case
+3,RULE-INTEG-TEST-PLAN,통합_테스트_계획서,통합 검증 계획서
+4,RULE-TEST-PLAN,Test Plan,Test Planning
+5,RULE-CLINICAL-TRIAL-PLAN,Clinical_Trial_Execution_Plan,임상 시험 수행 계획
+6,RULE-PLAN,Plan,Planning
+7,RULE-SQA-SYS,SQA_운용_체계_가이드라인,SQA 운용 가이드
