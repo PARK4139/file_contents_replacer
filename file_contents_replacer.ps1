@@ -51,27 +51,25 @@ if (-not $RuleFile) { $RuleFile = [string]$script:PathHistory.LastRule }
 if (-not $TargetFile) { $TargetFile = [string]$script:PathHistory.LastTarget }
 
 function Save-PathHistory {
-    $script:PathHistory.LastRule = $txtRule.Text.Trim()
-    $script:PathHistory.LastTarget = $txtTarget.Text.Trim()
-    foreach ($entry in @(
-        @{ Key = 'RulePaths'; Control = $txtRule },
-        @{ Key = 'TargetPaths'; Control = $txtTarget }
-    )) {
-        $current = $entry.Control.Text.Trim()
-        $paths = @(@($current) + @($script:PathHistory[$entry.Key]) |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-            Select-Object -Unique -First 30)
-        $script:PathHistory[$entry.Key] = $paths
-        $entry.Control.Items.Clear()
-        $entry.Control.Items.AddRange([object[]]$paths)
-        $entry.Control.Text = $current
-    }
     try {
+        $script:PathHistory.LastRule = $txtRule.Text.Trim()
+        $script:PathHistory.LastTarget = $txtTarget.Text.Trim()
+        foreach ($entry in @(
+            @{ Key = 'RulePaths'; Control = $txtRule },
+            @{ Key = 'TargetPaths'; Control = $txtTarget }
+        )) {
+            $current = $entry.Control.Text.Trim()
+            $paths = @(@($current) + @($script:PathHistory[$entry.Key]) |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+                Select-Object -Unique -First 30)
+            $script:PathHistory[$entry.Key] = $paths
+        }
+        # Closing must not mutate ComboBox items: native autocomplete can raise
+        # reentrant callbacks while WinForms is tearing down the window.
         $script:PathHistory | ConvertTo-Json -Depth 3 |
             Set-Content -LiteralPath $script:HistoryPath -Encoding UTF8 -ErrorAction Stop
     } catch {
-        $lblStatus.Text = "경로 이력 저장 실패: $($_.Exception.Message)"
-        Write-Warning $lblStatus.Text
+        Write-Warning "경로 이력 저장 실패: $($_.Exception.Message)"
     }
 }
 
@@ -248,6 +246,10 @@ $SECTION_DIVIDER
 $SECTION_LABEL
 [SW Test Plan][sw_test_plan]
 # [무시됩니다.][변경되었습니다]
+# 중복 용어 축약: 아래 규칙의 맨 앞 #을 지우면 활성화됩니다.
+# 예: stakeholder(stakeholder) -> stakeholder / 테스트(테스트) -> 테스트
+# 괄호 안팎이 다른 테스트(test)는 유지합니다. 용어는 문자, 숫자, _, -를 지원합니다.
+# [`$REG`$(`$REG`$)][`$REG`$]
 $SECTION_DIVIDER
 
 "@
@@ -412,9 +414,16 @@ function Invoke-ContentReplacement {
     $replaceLookup = @{}
     $countLookup = @{}
 
+    $duplicateRule = '$REG$($REG$)'
+    $hasDuplicateRule = @($validRules | Where-Object { $_.word -ceq $duplicateRule -and $_.replace -ceq '$REG$' }).Count -gt 0
+    if ($hasDuplicateRule) {
+        $patternParts += '(?<![\p{L}\p{M}\p{N}_-])(?<duplicateTerm>[\p{L}\p{M}\p{N}_-]+)\(\k<duplicateTerm>\)'
+    }
+
     foreach ($r in $validRules) {
-        $escaped = [regex]::Escape($r.word)
-        $patternParts += $escaped
+        if (-not ($r.word -ceq $duplicateRule -and $r.replace -ceq '$REG$')) {
+            $patternParts += [regex]::Escape($r.word)
+        }
         $replaceLookup[$r.word] = if ($null -ne $r.replace) { $r.replace } else { "" }
         $countLookup[$r.word] = 0
     }
@@ -424,6 +433,10 @@ function Invoke-ContentReplacement {
 
     $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
         param([System.Text.RegularExpressions.Match]$match)
+        if ($match.Groups['duplicateTerm'].Success) {
+            $countLookup[$duplicateRule]++
+            return $match.Groups['duplicateTerm'].Value
+        }
         $matchedWord = $match.Value
         if ($countLookup.ContainsKey($matchedWord)) {
             $countLookup[$matchedWord] = $countLookup[$matchedWord] + 1

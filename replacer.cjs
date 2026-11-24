@@ -195,6 +195,10 @@ function registerRuleFile(filePath) {
       SECTION_LABEL,
       '[SW Test Plan][sw_test_plan]',
       '# [무시됩니다.][변경되었습니다]',
+      '# 중복 용어 축약: 아래 규칙의 맨 앞 #을 지우면 활성화됩니다.',
+      '# 예: stakeholder(stakeholder) -> stakeholder / 테스트(테스트) -> 테스트',
+      '# 괄호 안팎이 다른 테스트(test)는 유지합니다. 용어는 문자, 숫자, _, -를 지원합니다.',
+      '# [$REG$($REG$)][$REG$]',
       SECTION_DIVIDER,
       ''
     ].join('\r\n');
@@ -360,7 +364,14 @@ function replaceFileContents(targetFilePath, sortedRules, options = {}) {
   }
 
   const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(validRules.map(r => escapeRegex(r.word)).join('|'), 'g');
+  const duplicateRule = '$REG$($REG$)';
+  const isDuplicateRule = r => r.word === duplicateRule && r.replace === '$REG$';
+  const hasDuplicateRule = validRules.some(isDuplicateRule);
+  const patternParts = validRules.filter(r => !isDuplicateRule(r)).map(r => escapeRegex(r.word));
+  if (hasDuplicateRule) {
+    patternParts.unshift('(?<![\\p{L}\\p{M}\\p{N}_-])(?<duplicateTerm>[\\p{L}\\p{M}\\p{N}_-]+)\\(\\k<duplicateTerm>\\)');
+  }
+  const pattern = new RegExp(patternParts.join('|'), 'gu');
 
   const replaceMap = new Map();
   const countMap = new Map();
@@ -372,10 +383,12 @@ function replaceFileContents(targetFilePath, sortedRules, options = {}) {
 
   let totalReplacements = 0;
   const doReplace = (text) => {
-    return text.replace(pattern, (matched) => {
-      countMap.set(matched, (countMap.get(matched) || 0) + 1);
+    return text.replace(pattern, (matched, ...args) => {
+      const term = hasDuplicateRule ? args[args.length - 1].duplicateTerm : undefined;
+      const key = term === undefined ? matched : duplicateRule;
+      countMap.set(key, (countMap.get(key) || 0) + 1);
       totalReplacements++;
-      return replaceMap.get(matched);
+      return term === undefined ? replaceMap.get(matched) : term;
     });
   };
 
