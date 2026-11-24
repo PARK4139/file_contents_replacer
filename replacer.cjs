@@ -144,10 +144,12 @@ function parseReplacerSection(content) {
       continue;
     }
 
-    // 2) [find] 단일 괄호 형식 파싱 (섹션 헤더 제외) -> [find][snake_case]로 자동 변환!
+    // 2) A bare line inside the rule section is equivalent to [find].
     const matchSingle = trimmed.match(/^\[(.*?)\]$/);
-    if (matchSingle && trimmed !== SECTION_LABEL) {
-      const findWord = matchSingle[1].trim();
+    const findWord = matchSingle && trimmed !== SECTION_LABEL
+      ? matchSingle[1].trim()
+      : (!/[\[\]]/.test(trimmed) ? trimmed : '');
+    if (findWord) {
       const autoReplace = autoGenerateReplacement(findWord);
       const stats = calculateWordStats(findWord);
       rules.push({

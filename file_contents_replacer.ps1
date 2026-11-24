@@ -196,9 +196,14 @@ function Parse-ReplacerSection {
             continue
         }
 
-        # 2) [find] 단일 괄호 형식 파싱 (섹션 헤더 제외) -> [find][snake_case] 로 자동 변환!
+        # 2) 단일 괄호 또는 대괄호 없는 한 줄을 자동 치환 규칙으로 해석
+        $findWord = $null
         if ($trimmed -match '^\s*\[(.*?)\]\s*$' -and $trimmed -ne $SECTION_LABEL) {
             $findWord = $Matches[1].Trim()
+        } elseif ($trimmed -notmatch '[\[\]]') {
+            $findWord = $trimmed
+        }
+        if (-not [string]::IsNullOrWhiteSpace($findWord)) {
             $autoReplace = Convert-ToAutoSnakeCase -Word $findWord
             $stats = Get-WordStats -Word $findWord
             $rules += [PSCustomObject]@{
