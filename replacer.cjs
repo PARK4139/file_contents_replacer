@@ -250,9 +250,26 @@ function sortRules(rules) {
     }
   }
 
+  // Add an editable identity mapping for a whitespace-to-snake_case result.
+  // An existing mapping for that result always wins, including user edits.
+  for (const r of Array.from(uniqueMap.values())) {
+    if (/\s/.test(r.word) && r.replace === autoGenerateReplacement(r.word) && !uniqueMap.has(r.replace)) {
+      const stats = calculateWordStats(r.replace);
+      uniqueMap.set(r.replace, {
+        word: r.replace,
+        replace: r.replace,
+        wordCount: stats.wordCount,
+        charLength: stats.charLength,
+        wasSingle: false
+      });
+    }
+  }
   const deduped = Array.from(uniqueMap.values());
 
   const sorted = deduped.sort((a, b) => {
+    const isPattern = r => r.word.includes('$REG$') || String(r.replace ?? '').includes('$REG$');
+    const patternOrder = Number(isPattern(a)) - Number(isPattern(b));
+    if (patternOrder !== 0) return patternOrder;
     if (b.wordCount !== a.wordCount) {
       return b.wordCount - a.wordCount;
     }
@@ -262,7 +279,25 @@ function sortRules(rules) {
     return a.word.localeCompare(b.word);
   });
 
-  return sorted.map((r, idx) => ({
+  const children = new Map();
+  const childWords = new Set();
+  for (const r of sorted) {
+    if (/\s/.test(r.word) && r.replace === autoGenerateReplacement(r.word)) {
+      const child = uniqueMap.get(r.replace);
+      if (child && !child.word.includes('$REG$') && !String(child.replace ?? '').includes('$REG$') && !childWords.has(child.word)) {
+        children.set(r.word, child);
+        childWords.add(child.word);
+      }
+    }
+  }
+  const grouped = [];
+  for (const r of sorted) {
+    if (childWords.has(r.word)) continue;
+    grouped.push(r);
+    if (children.has(r.word)) grouped.push(children.get(r.word));
+  }
+
+  return grouped.map((r, idx) => ({
     ...r,
     순번: idx + 1
   }));

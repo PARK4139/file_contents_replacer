@@ -313,17 +313,55 @@ function Sort-And-UpdateSection {
             }
         }
     }
+    # 공백을 snake_case로 바꾸는 규칙에는 편집 가능한 자기 치환 규칙도 추가합니다.
+    foreach ($r in @($uniqueMap.Values)) {
+        if ($r.Word -match '\s' -and
+            $r.Replace -ceq (Convert-ToAutoSnakeCase -Word $r.Word) -and
+            -not $uniqueMap.ContainsKey($r.Replace)) {
+            $stats = Get-WordStats -Word $r.Replace
+            $uniqueMap[$r.Replace] = [PSCustomObject]@{
+                Word = $r.Replace
+                Replace = $r.Replace
+                WordCount = $stats.WordCount
+                CharLength = $stats.CharLength
+                WasSingle = $false
+            }
+        }
+    }
     $dedupedRules = @($uniqueMap.Values)
 
-    # 어절 길이순 정렬: 1순위 어절수 내림차순, 2순위 글자수 내림차순, 3순위 단어 오름차순
-    $sorted = $dedupedRules | Sort-Object -Property @{Expression = "WordCount"; Descending = $true },
+    # 패턴 변수 규칙은 하단에 배치하고, 각 그룹 안에서는 긴 어절부터 정렬
+    $sorted = $dedupedRules | Sort-Object -Property @{Expression = { [int]($_.Word.Contains('$REG$') -or $_.Replace.Contains('$REG$')) }; Descending = $false },
+                                                    @{Expression = "WordCount"; Descending = $true },
                                                     @{Expression = "CharLength"; Descending = $true },
                                                     @{Expression = "Word"; Descending = $false }
 
-    # 순번 재부여
+    # 편집용 규칙은 독립 정렬하지 않고 원본 규칙 바로 다음에 붙입니다.
+    $childWords = @{}
+    $children = @{}
+    foreach ($r in $sorted) {
+        if ($r.Word -match '\s' -and
+            $r.Replace -ceq (Convert-ToAutoSnakeCase -Word $r.Word) -and
+            $uniqueMap.ContainsKey($r.Replace)) {
+            $child = $uniqueMap[$r.Replace]
+            if (-not ($child.Word.Contains('$REG$') -or $child.Replace.Contains('$REG$')) -and
+                -not $childWords.ContainsKey($child.Word)) {
+                $children[$r.Word] = $child
+                $childWords[$child.Word] = $true
+            }
+        }
+    }
+    $grouped = @()
+    foreach ($r in $sorted) {
+        if ($childWords.ContainsKey($r.Word)) { continue }
+        $grouped += $r
+        if ($children.ContainsKey($r.Word)) { $grouped += $children[$r.Word] }
+    }
+
+    # 묶음 순서로 연속 순번 재부여
     $finalRules = @()
     $seq = 1
-    foreach ($r in $sorted) {
+    foreach ($r in $grouped) {
         $finalRules += [PSCustomObject]@{
             '순번'    = $seq
             '레이블'  = "RULE-$seq"
