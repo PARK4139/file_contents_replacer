@@ -596,7 +596,7 @@ function Show-RuleCreatedNotice {
 # ------------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "파일본문 일괄 치환기 [file_contents_replacer]"
-$form.Size = New-Object System.Drawing.Size(620, 305)
+$form.Size = New-Object System.Drawing.Size(620, 335)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -679,16 +679,23 @@ $chkRecursive.Location = New-Object System.Drawing.Point(22, 160)
 $chkRecursive.AutoSize = $true
 $form.Controls.Add($chkRecursive)
 
+$chkAuto = New-Object System.Windows.Forms.CheckBox
+$chkAuto.Text = "규칙 섹션 변경 시 자동 치환"
+$chkAuto.Checked = $false
+$chkAuto.Location = New-Object System.Drawing.Point(22, 187)
+$chkAuto.AutoSize = $true
+$form.Controls.Add($chkAuto)
+
 $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Text = "경로를 입력하거나 파일을 창으로 드래그 앤 드롭하세요."
-$lblStatus.Location = New-Object System.Drawing.Point(22, 195)
+$lblStatus.Location = New-Object System.Drawing.Point(22, 222)
 $lblStatus.Size = New-Object System.Drawing.Size(330, 42)
 $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $form.Controls.Add($lblStatus)
 
 $btnExecute = New-Object System.Windows.Forms.Button
 $btnExecute.Text = "치환 실행"
-$btnExecute.Location = New-Object System.Drawing.Point(365, 195)
+$btnExecute.Location = New-Object System.Drawing.Point(365, 222)
 $btnExecute.Size = New-Object System.Drawing.Size(120, 38)
 $btnExecute.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
 $btnExecute.ForeColor = [System.Drawing.Color]::White
@@ -699,7 +706,7 @@ $form.Controls.Add($btnExecute)
 
 $btnClose = New-Object System.Windows.Forms.Button
 $btnClose.Text = "닫기"
-$btnClose.Location = New-Object System.Drawing.Point(495, 195)
+$btnClose.Location = New-Object System.Drawing.Point(495, 222)
 $btnClose.Size = New-Object System.Drawing.Size(90, 38)
 $btnClose.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
 $btnClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -820,6 +827,85 @@ $form.Add_DragDrop({
     $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(30, 41, 59)
 })
 
+# 규칙 블록만 감시하여 본문 변경이나 자체 정렬로 재실행하지 않습니다.
+function Get-RuleSectionSnapshot {
+    param([string]$FilePath)
+    if (-not $FilePath -or -not (Test-Path -LiteralPath $FilePath -PathType Leaf)) { return $null }
+    $parsed = Parse-ReplacerSection -FilePath $FilePath
+    if (-not $parsed.HasLabel) { return $null }
+    return ($parsed.Lines[$parsed.BlockStartIdx..$parsed.BlockEndIdx] -join "`n")
+}
+
+$script:autoSnapshot = $null
+$script:autoPath = ''
+$script:autoRun = $false
+$script:autoPending = $false
+$autoMonitor = New-Object System.Windows.Forms.Timer
+$autoMonitor.Interval = 500
+$autoDelay = New-Object System.Windows.Forms.Timer
+$autoDelay.Interval = 500
+
+function Reset-AutoSnapshot {
+    $script:autoPath = $txtRule.Text.Trim()
+    try { $script:autoSnapshot = Get-RuleSectionSnapshot -FilePath $script:autoPath }
+    catch { $script:autoSnapshot = $null }
+}
+
+$chkAuto.Add_CheckedChanged({
+    $autoDelay.Stop()
+    $script:autoPending = $false
+    if ($chkAuto.Checked) { Reset-AutoSnapshot; $autoMonitor.Start() }
+    else { $autoMonitor.Stop() }
+})
+
+$autoMonitor.Add_Tick({
+    if (-not $chkAuto.Checked -or $script:autoPending) { return }
+    $path = $txtRule.Text.Trim()
+    if ($path -cne $script:autoPath) { Reset-AutoSnapshot; return }
+    try { $snapshot = Get-RuleSectionSnapshot -FilePath $path } catch { return }
+    if ($null -eq $snapshot) { return }
+    if ($null -eq $script:autoSnapshot) { $script:autoSnapshot = $snapshot; return }
+    if ([string]::Equals($snapshot, $script:autoSnapshot, [StringComparison]::Ordinal)) { return }
+    $script:autoSnapshot = $snapshot
+    $script:autoPending = $true
+
+    $notice = New-Object System.Windows.Forms.Form
+    $notice.Text = '자동 치환 안내'
+    $notice.ClientSize = New-Object System.Drawing.Size(380, 70)
+    $notice.StartPosition = 'CenterParent'
+    $notice.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedToolWindow
+    $notice.ShowInTaskbar = $false
+    $message = New-Object System.Windows.Forms.Label
+    $message.Dock = [System.Windows.Forms.DockStyle]::Fill
+    $message.Padding = New-Object System.Windows.Forms.Padding(12)
+    $message.Text = '규칙 변경을 감지했습니다. 0.5초 후 자동 치환합니다.'
+    $notice.Controls.Add($message)
+    $noticeTimer = New-Object System.Windows.Forms.Timer
+    $noticeTimer.Interval = 1000
+    $notice.Tag = $noticeTimer
+    $noticeTimer.Add_Tick({ $notice.Close() }.GetNewClosure())
+    $notice.Add_FormClosed({ param($sender, $eventArgs) $sender.Tag.Stop(); $sender.Tag.Dispose(); $sender.Dispose() })
+    $notice.Show($form)
+    $noticeTimer.Start()
+    $autoDelay.Start()
+})
+
+$autoDelay.Add_Tick({
+    $autoDelay.Stop()
+    $script:autoPending = $false
+    if (-not $chkAuto.Checked -or $txtRule.Text.Trim() -cne $script:autoPath) { return }
+    try { $snapshot = Get-RuleSectionSnapshot -FilePath $script:autoPath } catch { return }
+    if ($null -eq $snapshot -or -not [string]::Equals($snapshot, $script:autoSnapshot, [StringComparison]::Ordinal)) { return }
+    $autoMonitor.Stop()
+    $script:autoRun = $true
+    try { $btnExecute.PerformClick() }
+    finally {
+        $script:autoRun = $false
+        Reset-AutoSnapshot
+        if ($chkAuto.Checked) { $autoMonitor.Start() }
+    }
+})
+
 # 치환 실행 버튼 이벤트
 $btnExecute.Add_Click({
     $ruleFile = $txtRule.Text.Trim()
@@ -842,6 +928,7 @@ $btnExecute.Add_Click({
         return
     }
 
+    if (-not $script:autoRun) { $autoMonitor.Stop(); $autoDelay.Stop(); $script:autoPending = $false }
     Save-PathHistory
     try {
         $lblStatus.Text = "규칙 파싱 및 정렬 중..."
@@ -869,11 +956,15 @@ $btnExecute.Add_Click({
         $lblStatus.Text = "치환 완료! (총 $($result.TotalCount)회 치환됨)"
         $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
 
-        [System.Windows.Forms.MessageBox]::Show("치환이 완료되었습니다!`n`n총 치환 횟수: $($result.TotalCount)회`n적용 대상: $targetFile$protectMsg$backupMsg", "치환 완료", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        if (-not $script:autoRun) {
+            [System.Windows.Forms.MessageBox]::Show("치환이 완료되었습니다!`n`n총 치환 횟수: $($result.TotalCount)회`n적용 대상: $targetFile$protectMsg$backupMsg", "치환 완료", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information)
+        }
     } catch {
         $lblStatus.Text = "오류 발생: $($_.Exception.Message)"
         $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(220, 38, 38)
         [System.Windows.Forms.MessageBox]::Show("치환 실행 실패:`n$($_.Exception.Message)", "오류", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)
+    } finally {
+        if (-not $script:autoRun -and $chkAuto.Checked) { Reset-AutoSnapshot; $autoMonitor.Start() }
     }
 })
 
@@ -881,11 +972,12 @@ $btnClose.Add_Click({
     $form.Close()
 })
 
-# 모든 체크 옵션은 실행할 때마다 기본 활성화합니다.
+# 자동 감시는 사용자가 켰을 때만 작동합니다.
 # 별도 대상 경로는 동일 파일 옵션을 해제하면 복원합니다.
 $script:SeparateTarget = $txtTarget.Text
 $chkSameFile.Checked = $true
-$form.Add_FormClosing({ Save-PathHistory })
+$form.Add_FormClosing({ $autoMonitor.Stop(); $autoDelay.Stop(); Save-PathHistory })
+$form.Add_FormClosed({ $autoMonitor.Dispose(); $autoDelay.Dispose() })
 
 # 폼 표시 (불필요한 시작 팝업 일체 없음)
 [void]$form.ShowDialog()
