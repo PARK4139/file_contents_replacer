@@ -426,7 +426,9 @@ function Invoke-ContentReplacement {
     param (
         [string]$TargetFile,
         [array]$Rules,
-        [bool]$CreateBackup = $true
+        [bool]$CreateBackup = $true,
+        [bool]$Recursive = $true,
+        [TimeSpan]$Timeout = ([TimeSpan]::FromHours(24))
     )
 
     if (-not (Test-Path $TargetFile)) {
@@ -453,6 +455,13 @@ function Invoke-ContentReplacement {
     }
 
     # 긴 어절이 앞선 순서대로 단일 패스 정규식 생성
+    if ($Recursive) {
+        $validRules = @($validRules | Where-Object { $_.word -cne $_.replace })
+        if ($validRules.Count -eq 0) {
+            return @{ TotalCount = 0; Stats = @(); Changed = $false; BackupPath = if ($CreateBackup) { "$TargetFile.bak" } else { $null }; SectionProtected = (Parse-ReplacerSection -FilePath $TargetFile).HasLabel }
+        }
+    }
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $patternParts = @()
     $replaceLookup = @{}
     $countLookup = @{}
@@ -472,10 +481,11 @@ function Invoke-ContentReplacement {
     }
 
     $combinedPattern = "(" + ($patternParts -join "|") + ")"
-    $regex = [regex]::new($combinedPattern, [System.Text.RegularExpressions.RegexOptions]::None)
+    $regex = [regex]::new($combinedPattern, [System.Text.RegularExpressions.RegexOptions]::None, $Timeout)
 
     $evaluator = [System.Text.RegularExpressions.MatchEvaluator] {
         param([System.Text.RegularExpressions.Match]$match)
+        if ($timer.Elapsed -ge $Timeout) { throw "치환이 제한 시간($Timeout)을 초과하여 중단되었습니다. 대상 파일은 저장하지 않았습니다." }
         if ($match.Groups['duplicateTerm'].Success) {
             $countLookup[$duplicateRule]++
             return $match.Groups['duplicateTerm'].Value
@@ -492,33 +502,35 @@ function Invoke-ContentReplacement {
     $sectionProtected = $false
     $newContent = ""
 
-    if ($parsedTarget.HasLabel) {
-        $sectionProtected = $true
-        $lines = $parsedTarget.Lines
-        $beforeLines = if ($parsedTarget.BlockStartIdx -gt 0) { @($lines[0..($parsedTarget.BlockStartIdx - 1)]) } else { @() }
-        $sectionLines = @($lines[$parsedTarget.BlockStartIdx..$parsedTarget.BlockEndIdx])
-        $afterLines = if ($parsedTarget.BlockEndIdx -lt ($lines.Length - 1)) { @($lines[($parsedTarget.BlockEndIdx + 1)..($lines.Length - 1)]) } else { @() }
-
-        $parts = @()
-        if ($beforeLines.Count -gt 0) {
-            $beforeText = ($beforeLines -join $eol)
-            $parts += $regex.Replace($beforeText, $evaluator)
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $currentContent = $originalContent
+    try {
+        while ($true) {
+            if ($timer.Elapsed -ge $Timeout) { throw "치환이 제한 시간($Timeout)을 초과하여 중단되었습니다. 대상 파일은 저장하지 않았습니다." }
+            if ($Recursive) {
+                $hash = [Convert]::ToBase64String($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($currentContent)))
+                if (-not $seen.Add($hash)) { throw "치환 규칙이 순환하여 중단되었습니다. 대상 파일은 저장하지 않았습니다." }
+            }
+            if ($parsedTarget.HasLabel) {
+                $sectionProtected = $true
+                $lines = $currentContent.Split([string[]]@($eol), [System.StringSplitOptions]::None)
+                $beforeLines = if ($parsedTarget.BlockStartIdx -gt 0) { @($lines[0..($parsedTarget.BlockStartIdx - 1)]) } else { @() }
+                $sectionLines = @($lines[$parsedTarget.BlockStartIdx..$parsedTarget.BlockEndIdx])
+                $afterLines = if ($parsedTarget.BlockEndIdx -lt ($lines.Length - 1)) { @($lines[($parsedTarget.BlockEndIdx + 1)..($lines.Length - 1)]) } else { @() }
+                $parts = @()
+                if ($beforeLines.Count -gt 0) { $parts += $regex.Replace(($beforeLines -join $eol), $evaluator) }
+                $parts += ($sectionLines -join $eol)
+                if ($afterLines.Count -gt 0) { $parts += $regex.Replace(($afterLines -join $eol), $evaluator) }
+                $newContent = $parts -join $eol
+            } else {
+                $newContent = $regex.Replace($currentContent, $evaluator)
+            }
+            if (-not $Recursive -or [string]::Equals($newContent, $currentContent, [System.StringComparison]::Ordinal)) { break }
+            $currentContent = $newContent
         }
-        
-        # [file_contents_replacer] 규칙 섹션은 치환하지 않고 100% 원본 그대로 보존
-        $parts += ($sectionLines -join $eol)
-
-        if ($afterLines.Count -gt 0) {
-            $afterText = ($afterLines -join $eol)
-            $parts += $regex.Replace($afterText, $evaluator)
-        }
-
-        $newContent = $parts -join $eol
-        if (($originalContent.EndsWith("`r`n") -or $originalContent.EndsWith("`n")) -and -not ($newContent.EndsWith("`r`n") -or $newContent.EndsWith("`n"))) {
-            $newContent += $eol
-        }
-    } else {
-        $newContent = $regex.Replace($originalContent, $evaluator)
+    } finally {
+        $sha.Dispose()
     }
 
     $totalReplaced = 0
@@ -584,7 +596,7 @@ function Show-RuleCreatedNotice {
 # ------------------------------------------------------------------------------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "파일본문 일괄 치환기 [file_contents_replacer]"
-$form.Size = New-Object System.Drawing.Size(620, 270)
+$form.Size = New-Object System.Drawing.Size(620, 305)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog
 $form.MaximizeBox = $false
@@ -660,16 +672,23 @@ $chkBackup.AutoSize = $true
 $form.Controls.Add($chkBackup)
 
 # 4. 상태 메시지 및 실행/닫기 버튼
+$chkRecursive = New-Object System.Windows.Forms.CheckBox
+$chkRecursive.Text = "치환 결과에 규칙 반복 적용 (연쇄 치환)"
+$chkRecursive.Checked = $true
+$chkRecursive.Location = New-Object System.Drawing.Point(22, 160)
+$chkRecursive.AutoSize = $true
+$form.Controls.Add($chkRecursive)
+
 $lblStatus = New-Object System.Windows.Forms.Label
 $lblStatus.Text = "경로를 입력하거나 파일을 창으로 드래그 앤 드롭하세요."
-$lblStatus.Location = New-Object System.Drawing.Point(22, 168)
+$lblStatus.Location = New-Object System.Drawing.Point(22, 195)
 $lblStatus.Size = New-Object System.Drawing.Size(330, 42)
 $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(100, 116, 139)
 $form.Controls.Add($lblStatus)
 
 $btnExecute = New-Object System.Windows.Forms.Button
 $btnExecute.Text = "치환 실행"
-$btnExecute.Location = New-Object System.Drawing.Point(365, 168)
+$btnExecute.Location = New-Object System.Drawing.Point(365, 195)
 $btnExecute.Size = New-Object System.Drawing.Size(120, 38)
 $btnExecute.BackColor = [System.Drawing.Color]::FromArgb(22, 163, 74)
 $btnExecute.ForeColor = [System.Drawing.Color]::White
@@ -680,7 +699,7 @@ $form.Controls.Add($btnExecute)
 
 $btnClose = New-Object System.Windows.Forms.Button
 $btnClose.Text = "닫기"
-$btnClose.Location = New-Object System.Drawing.Point(495, 168)
+$btnClose.Location = New-Object System.Drawing.Point(495, 195)
 $btnClose.Size = New-Object System.Drawing.Size(90, 38)
 $btnClose.BackColor = [System.Drawing.Color]::FromArgb(241, 245, 249)
 $btnClose.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
@@ -842,7 +861,7 @@ $btnExecute.Add_Click({
         $lblStatus.Text = "본문 치환 진행 중..."
         $form.Refresh()
 
-        $result = Invoke-ContentReplacement -TargetFile $targetFile -Rules $sortedRules -CreateBackup $chkBackup.Checked
+        $result = Invoke-ContentReplacement -TargetFile $targetFile -Rules $sortedRules -CreateBackup $chkBackup.Checked -Recursive $chkRecursive.Checked
 
         $protectMsg = if ($result.SectionProtected) { "`n`n(규칙 섹션은 100% 원본 그대로 보호됨)" } else { "" }
         $backupMsg = if ($result.BackupPath) { "`n백업 생성: $($result.BackupPath)" } else { "" }
