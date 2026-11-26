@@ -23,6 +23,37 @@
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# A PowerShell pipeline interrupted by Ctrl+C can leave WinForms callbacks
+# running against a stopped pipeline, resulting in an unhandled exception dialog.
+# Exit directly from the native console handler instead of invoking PowerShell.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class ReplacerConsoleShutdown
+{
+    private delegate bool ConsoleHandler(uint signal);
+    private static readonly ConsoleHandler Handler = HandleSignal;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleCtrlHandler(ConsoleHandler handler, bool add);
+
+    public static void Register()
+    {
+        if (!SetConsoleCtrlHandler(Handler, true))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+    }
+
+    private static bool HandleSignal(uint signal)
+    {
+        if (signal != 0 && signal != 1) return false;
+        Environment.Exit(130);
+        return true;
+    }
+}
+'@
+[ReplacerConsoleShutdown]::Register()
+
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
